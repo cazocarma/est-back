@@ -9,6 +9,7 @@ declare module 'express-session' {
   interface SessionData {
     userId?: number;
     sub?: string;
+    kcSid?: string;         // claim 'sid' del id_token — necesario para backchannel logout (§11.2)
     usuario?: string;
     nombre?: string;
     email?: string | null;

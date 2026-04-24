@@ -9,6 +9,7 @@ import { buildSessionMiddleware } from './middleware/session.js';
 import { buildHealthRouter } from './features/health/health.controller.js';
 import { buildMetricsRouter, metricsMiddleware } from './features/metrics/metrics.controller.js';
 import { buildAuthRouter } from './features/auth/auth.controller.js';
+import { buildBackchannelLogoutRouter } from './features/auth/auth.backchannel.js';
 import { buildTemporadasRouter } from './features/maestros/temporadas/temporadas.controller.js';
 import { buildPlantasRouter } from './features/maestros/plantas/plantas.controller.js';
 import { buildUnidadesRouter } from './features/maestros/unidades/unidades.controller.js';
@@ -67,6 +68,9 @@ export function buildApp(): express.Express {
   app.use(buildHealthRouter());
   app.use(buildMetricsRouter());
   app.use('/api/v1/auth', buildAuthRouter());
+  // Backchannel logout — llamado server-to-server por Keycloak, sin sesion ni CSRF.
+  // Montado como router separado para no cargar middlewares de /auth/* que asumen sesion.
+  app.use('/api/v1/auth', buildBackchannelLogoutRouter());
 
   // Fase 2 — Maestros internos (requieren sesion; los mutating ademas requieren CSRF + rol admin)
   app.use('/api/v1/temporadas', buildTemporadasRouter());

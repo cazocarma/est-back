@@ -16,17 +16,20 @@ import { logAuditEvent } from './auth.audit.js';
 const loginLimiter = rateLimit({ windowMs: 60_000, limit: 30 });
 const callbackLimiter = rateLimit({ windowMs: 60_000, limit: 60 });
 
+// AUTH_STANDARD.md §2.1 — rutas internas: empiezan con '/' pero NO con '//' (protocol-relative).
 const SAFE_RETURN_TO = /^\/[^\s]*$/;
+function sanitizeReturnTo(raw: unknown): string {
+  if (typeof raw !== 'string') return '/';
+  if (raw.startsWith('//')) return '/';
+  return SAFE_RETURN_TO.test(raw) ? raw : '/';
+}
 
 export function buildAuthRouter(): Router {
   const r = Router();
 
   r.get('/login', loginLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const returnToRaw = req.query.returnTo;
-      const returnTo =
-        typeof returnToRaw === 'string' && SAFE_RETURN_TO.test(returnToRaw) ? returnToRaw : '/';
-
+      const returnTo = sanitizeReturnTo(req.query.returnTo);
       const url = await buildAuthorizationUrl(req, returnTo);
       res.redirect(302, url);
     } catch (err) {
@@ -37,7 +40,7 @@ export function buildAuthRouter(): Router {
   r.get('/callback', callbackLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await handleCallback(req);
-      const { tokenSet, usuarioId, returnTo, role } = result;
+      const { tokenSet, usuarioId, returnTo, role, kcSid } = result;
 
       await new Promise<void>((resolve, reject) => {
         req.session.regenerate((err) => (err ? reject(err) : resolve()));
@@ -46,6 +49,7 @@ export function buildAuthRouter(): Router {
       const claims = tokenSet.claims();
       req.session.userId = usuarioId;
       req.session.sub = claims.sub;
+      if (kcSid) req.session.kcSid = kcSid;
       req.session.usuario =
         (claims.preferred_username as string | undefined) ??
         (claims.email as string | undefined) ??
@@ -71,7 +75,8 @@ export function buildAuthRouter(): Router {
       res.redirect(302, returnTo || '/');
     } catch (err) {
       if (err instanceof HttpError && err.status === 403) {
-        await logAuditEvent(req, 'FORBIDDEN_ROLE', err.message);
+        const op = err.code === 'user_suspended' ? 'FORBIDDEN_SUSPENDED' : 'FORBIDDEN_ROLE';
+        await logAuditEvent(req, op, err.message);
       }
       next(err);
     }

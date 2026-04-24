@@ -6,11 +6,19 @@ import { logger } from '../../config/logger.js';
 import { HttpError } from '../../middleware/error.js';
 import { upsertUsuario } from './auth.repository.js';
 
+let cachedIssuer: Issuer<Client> | null = null;
 let cachedClient: Client | null = null;
+
+async function getOidcIssuer(): Promise<Issuer<Client>> {
+  if (cachedIssuer) return cachedIssuer;
+  cachedIssuer = await Issuer.discover(env.OIDC_DISCOVERY_URL);
+  logger.info({ issuer: cachedIssuer.metadata.issuer }, 'OIDC issuer descubierto');
+  return cachedIssuer;
+}
 
 async function getOidcClient(): Promise<Client> {
   if (cachedClient) return cachedClient;
-  const issuer = await Issuer.discover(env.OIDC_DISCOVERY_URL);
+  const issuer = await getOidcIssuer();
   cachedClient = new issuer.Client({
     client_id: env.OIDC_CLIENT_ID,
     client_secret: env.OIDC_CLIENT_SECRET,
@@ -18,8 +26,14 @@ async function getOidcClient(): Promise<Client> {
     response_types: ['code'],
     token_endpoint_auth_method: 'client_secret_basic',
   });
-  logger.info({ issuer: issuer.metadata.issuer }, 'OIDC issuer descubierto');
   return cachedClient;
+}
+
+export async function getIssuerMetadata(): Promise<{ issuer: string; jwksUri: string }> {
+  const issuer = await getOidcIssuer();
+  const jwksUri = issuer.metadata.jwks_uri;
+  if (!jwksUri) throw new Error('issuer sin jwks_uri');
+  return { issuer: issuer.metadata.issuer, jwksUri };
 }
 
 export async function buildAuthorizationUrl(req: Request, returnTo: string): Promise<string> {
@@ -45,6 +59,7 @@ export async function handleCallback(req: Request): Promise<{
   tokenSet: TokenSet;
   returnTo: string;
   role: string;
+  kcSid: string | null;
 }> {
   const preAuth = req.session.preAuth;
   if (!preAuth) {
@@ -84,14 +99,17 @@ export async function handleCallback(req: Request): Promise<{
   });
 
   if (!usuario.Activo) {
-    throw new HttpError(403, 'forbidden', 'Usuario suspendido');
+    throw new HttpError(403, 'user_suspended', 'Usuario suspendido');
   }
+
+  const kcSid = typeof claims.sid === 'string' ? claims.sid : null;
 
   return {
     usuarioId: usuario.UsuarioId,
     tokenSet,
     returnTo: preAuth.returnTo,
     role: env.OIDC_REQUIRED_ROLE,
+    kcSid,
   };
 }
 
